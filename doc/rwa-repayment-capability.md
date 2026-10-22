@@ -31,13 +31,24 @@ The current implementation consumes a frozen position/entitlement ledger and:
   claiming the same on-chain transfer;
 - verifies network, escrow contract, SAC, receiver, net amount, transaction hash,
   operation/event id and ledger before settling a position;
-- never closes a position short of its exact frozen net entitlement.
+- never closes a position short of its exact frozen net entitlement;
+- persists every intent in `rwa_repayment_payout_intents` through a service-role
+  repository, with one row per asset/position/tranche and unique confirmed
+  evidence per network/transaction/event;
+- exposes the position, tranche, receiver, net amount and schedule commitment on
+  the admin approval/release queue items and the append-only escrow audit
+  payload.
 
 `lib/trustless/repayment-position-payout-deploy.ts` maps the frozen schedule to a
 Trustless Work initialize payload and persists position, tranche, receiver, net
 amount and schedule commitment on every cached milestone. The existing
 `deployRepaymentEscrow` command uses this path only when `payoutSchedule` is
 provided; legacy single-investor deploys are unchanged.
+
+The additive migration is
+`supabase/migrations/20261022000100_rwa_repayment_payout_intents.sql`. The table
+has no client write policy; the service role is the only writer and admins can
+read it through RLS.
 
 ## Not verified
 

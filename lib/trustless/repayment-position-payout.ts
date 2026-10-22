@@ -512,6 +512,41 @@ export function buildPositionPayoutSchedule(
   }
 }
 
+export type PayoutAuditContext = {
+  readonly assetId: string
+  readonly positionId: string
+  readonly trancheIndex: number
+  readonly milestoneIndex: number
+  readonly receiver: string
+  readonly grossAtomic: string
+  readonly netAtomic: string
+  readonly feeAtomic: string
+  readonly scheduleCommitment: string
+  readonly settledNetAtomic?: string
+  readonly outstandingNetAtomic?: string
+}
+
+/** Structured position/tranche context for the append-only escrow audit payload. */
+export function buildPayoutAuditContext(
+  schedule: PositionPayoutSchedule,
+  milestone: PositionPayoutMilestone,
+  settlement?: { readonly settledNetAtomic: string; readonly outstandingNetAtomic: string },
+): PayoutAuditContext {
+  return {
+    assetId: schedule.assetId,
+    positionId: milestone.positionId,
+    trancheIndex: milestone.trancheIndex,
+    milestoneIndex: milestone.milestoneIndex,
+    receiver: milestone.receiver,
+    grossAtomic: milestone.grossAtomic,
+    netAtomic: milestone.netAtomic,
+    feeAtomic: milestone.feeAtomic,
+    scheduleCommitment: schedule.commitment,
+    settledNetAtomic: settlement?.settledNetAtomic,
+    outstandingNetAtomic: settlement?.outstandingNetAtomic,
+  }
+}
+
 export type RepaymentPayoutState = 'prepared' | 'submitted' | 'unknown' | 'failed' | 'confirmed'
 
 export type RepaymentPayoutConfirmation = {

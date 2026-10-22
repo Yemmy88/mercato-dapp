@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Keypair, StrKey } from '@stellar/stellar-sdk'
 import {
   allocateProRataAtomic,
+  buildPayoutAuditContext,
   buildPositionPayoutSchedule,
   confirmPayout,
   DEFAULT_PAYOUT_FEE_POLICY,
@@ -18,6 +21,10 @@ import {
   type RepaymentPayoutIntent,
   summarizePositionSettlement,
 } from '@/lib/trustless/repayment-position-payout'
+import {
+  fromRepaymentPayoutIntentRow,
+  toRepaymentPayoutIntentRow,
+} from '@/lib/rwa/repayment-payout-intents'
 import { planPositionPayoutDeploy } from '@/lib/trustless/repayment-position-payout-deploy'
 import { createRepaymentEscrowCommands } from '@/lib/deals/repayment-escrow-commands'
 import type {
@@ -727,5 +734,91 @@ describe('recoverable payout intents', () => {
     expect(payoutIdempotencyKey(ASSET_ID, 'position-a', 1)).not.toBe(
       payoutIdempotencyKey(ASSET_ID, 'position-b', 1),
     )
+  })
+})
+
+describe('payout persistence and audit binding', () => {
+  test('round-trips a persisted intent row and its confirmation evidence', async () => {
+    const { intents } = await prepared()
+    const intent = at(intents, 'position-a', 0)
+    const row = toRepaymentPayoutIntentRow(intent, 'deal-1')
+    expect(row).toMatchObject({
+      idempotency_key: intent.idempotencyKey,
+      deal_id: 'deal-1',
+      asset_id: ASSET_ID,
+      position_id: 'position-a',
+      tranche_index: 0,
+      gross_atomic: intent.grossAtomic,
+      net_atomic: intent.netAtomic,
+      fee_atomic: intent.feeAtomic,
+      schedule_commitment: intent.scheduleCommitment,
+      state: 'prepared',
+      confirmation_tx_hash: null,
+    })
+
+    const parsed = fromRepaymentPayoutIntentRow({
+      ...row,
+      deal_id: 'deal-1',
+      created_at: '2026-10-22T00:00:00.000Z',
+      updated_at: intent.updatedAt,
+    })
+    expect(parsed).toEqual(intent)
+
+    const confirmed: RepaymentPayoutIntent = {
+      ...intent,
+      state: 'confirmed',
+      submissionHash: 'a'.repeat(64),
+      confirmation: {
+        txHash: 'a'.repeat(64),
+        operationOrEventId: 'event-1',
+        ledgerSeq: 123,
+        confirmedAt: '2026-10-22T01:00:00.000Z',
+      },
+    }
+    const confirmedRow = toRepaymentPayoutIntentRow(confirmed)
+    const parsedConfirmed = fromRepaymentPayoutIntentRow({
+      ...confirmedRow,
+      created_at: '2026-10-22T00:00:00.000Z',
+      updated_at: confirmed.updatedAt,
+    })
+    expect(parsedConfirmed).toEqual(confirmed)
+    expect(confirmedRow.deal_id).toBeUndefined()
+  })
+
+  test('builds an audit context bound to position, tranche and outstanding amount', () => {
+    const built = schedule()
+    const milestone = built.milestones[0]
+    const context = buildPayoutAuditContext(built, milestone, {
+      settledNetAtomic: '0',
+      outstandingNetAtomic: milestone.netAtomic,
+    })
+    expect(context).toMatchObject({
+      assetId: ASSET_ID,
+      positionId: 'position-a',
+      trancheIndex: 0,
+      milestoneIndex: 0,
+      receiver: ACCOUNT_A,
+      grossAtomic: milestone.grossAtomic,
+      netAtomic: milestone.netAtomic,
+      scheduleCommitment: built.commitment,
+      settledNetAtomic: '0',
+      outstandingNetAtomic: milestone.netAtomic,
+    })
+  })
+
+  test('ships an additive intent migration with unique confirmation evidence', () => {
+    const migration = readFileSync(
+      join(
+        process.cwd(),
+        'supabase',
+        'migrations',
+        '20261022000100_rwa_repayment_payout_intents.sql',
+      ),
+      'utf8',
+    )
+    expect(migration).toContain('create table if not exists public.rwa_repayment_payout_intents')
+    expect(migration).toContain('uq_rwa_repayment_payout_intents_confirmation')
+    expect(migration).toContain("where state = 'confirmed'")
+    expect(migration).toContain('public.rwa_is_admin()')
   })
 })
